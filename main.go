@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hashicorp/go-retryablehttp"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -21,8 +22,8 @@ type ErgTx struct {
 }
 
 type ErgClient struct {
-  client *http.Client
-  req    *http.Request
+  client *retryablehttp.Client
+  req    *retryablehttp.Request
 }
 
 type CombinedHashes struct {
@@ -49,10 +50,16 @@ var ergNodeApiKey string
 var combinedHashes []CombinedHashes
 var allErgTxs map[string]bool
 
-func getEthBlockNumber(apiKey string) (string, error) {
+func getEthBlockNumber(client *retryablehttp.Client, apiKey string) (string, error) {
   var ethBlockNumber EthBlockNumber
 
-  resp, err := http.Get(blockNumberEndpoint + "&apikey=" + apiKey)
+  req, err := retryablehttp.NewRequest("GET", blockNumberEndpoint + "&apikey=" + apiKey, nil)
+  if err != nil {
+    return "", fmt.Errorf("error creating getEthBlockNumber request - %s", err.Error())
+  }
+  req.Header.Set("no-scanner-func", "getEthBlockNumber")
+
+  resp, err := client.Do(req)
   if err != nil {
     return "", fmt.Errorf("error calling blockNumberEndpoint - %s", err.Error())
   }
@@ -75,10 +82,16 @@ func getEthBlockNumber(apiKey string) (string, error) {
   return ethBlockNumber.Result, nil
 }
 
-func getEthBlock(apiKey, blockNum string) (EthBlock, error) {
+func getEthBlock(client *retryablehttp.Client, apiKey, blockNum string) (EthBlock, error) {
   var ethBlock EthBlock
 
-  resp, err := http.Get(getBlockByNumberEndpoint + "&tag=" + blockNum + "&boolean=true&apikey=" + apiKey)
+  req, err := retryablehttp.NewRequest("GET", getBlockByNumberEndpoint + "&tag=" + blockNum + "&boolean=true&apikey=" + apiKey, nil)
+  if err != nil {
+    return ethBlock, fmt.Errorf("error creating getEthBlock request - %s", err.Error())
+  }
+  req.Header.Set("no-scanner-func", "getEthBlock")
+
+  resp, err := client.Do(req)
   if err != nil {
     return ethBlock, fmt.Errorf("error calling getBlockByNumberEndpoint - %s", err.Error())
   }
@@ -122,12 +135,13 @@ func (e *ErgClient) getErgUnconfirmedTxs() ([]ErgTx, error) {
 func (e *ErgClient) postErgOracleTx(payload []byte) ([]byte, error) {
   var ret []byte
 
-  req, err := http.NewRequest("POST", postErgOracleTxEndpoint, bytes.NewBuffer(payload))
+  req, err := retryablehttp.NewRequest("POST", postErgOracleTxEndpoint, bytes.NewBuffer(payload))
   if err != nil {
-    return ret, fmt.Errorf("got error creating request - %s", err.Error())
+    return ret, fmt.Errorf("error creating postErgOracleTx request - %s", err.Error())
   }
   req.SetBasicAuth(nodeUser, nodePassword)
   req.Header.Set("api_key", ergNodeApiKey)
+  req.Header.Set("no-scanner-func", "postErgOracleTx")
   req.Header.Set("Content-Type", "application/json")
 
   resp, err := e.client.Do(req)
@@ -152,6 +166,7 @@ func reverse(ch *[]CombinedHashes) {
 func main() {
 
   log.SetFormatter(&log.JSONFormatter{})
+  log.SetLevel(log.InfoLevel)
 
   hostname, err := os.Hostname()
   if err != nil {
@@ -212,41 +227,49 @@ func main() {
     TLSHandshakeTimeout: 3 * time.Second,
   }
 
-  client := &http.Client{
-    Timeout:   time.Second * 5,
-    Transport: t,
+  retryClient := retryablehttp.NewClient()
+  retryClient.HTTPClient.Transport = t
+  retryClient.HTTPClient.Timeout = time.Second * 3
+  retryClient.Logger = nil
+  retryClient.RetryWaitMin = 100 * time.Millisecond
+  retryClient.RetryWaitMax = 150 * time.Millisecond
+  retryClient.RetryMax = 2
+  retryClient.RequestLogHook = func(l retryablehttp.Logger, r *http.Request, i int) {
+    retryCount := i
+    if retryCount > 0 {
+      logger.WithFields(log.Fields{
+        "caller":     r.Header.Get("no-scanner-func"),
+        "retryCount": retryCount,
+      }).Errorf("func call to %s failed retrying", r.Header.Get("no-scanner-func"))
+    }
   }
 
-  scanEthInterval := time.NewTimer(500 * time.Millisecond)
-  for range scanEthInterval.C {
-    break
-  }
-
-  req, err := http.NewRequest("GET", getErgUnconfirmedTxsEndpoint, nil)
+  req, err := retryablehttp.NewRequest("GET", getErgUnconfirmedTxsEndpoint, nil)
   if err != nil {
     logger.WithFields(log.Fields{
       "error": err.Error(),
     }).Fatal("failed to build 'getErgUnconfirmedTxsEndpoint' http request")
   }
+  req.Header.Set("no-scanner-func", "getErgUnconfirmedTxs")
   req.SetBasicAuth(nodeUser, nodePassword)
 
   ergClient := &ErgClient{
-    client: client,
+    client: retryClient,
     req:    req,
   }
 
   start = time.Now()
-  ethBlockNum, err := getEthBlockNumber(apiKey)
+  ethBlockNum, err := getEthBlockNumber(retryClient, apiKey)
   if err != nil {
     logger.WithFields(log.Fields{
-      "caller":   "getEthBlockNumber",
-      "error":    err.Error(),
-      "duration": time.Since(start).Milliseconds(),
+      "caller":     "getEthBlockNumber",
+      "error":      err.Error(),
+      "durationMs": time.Since(start).Milliseconds(),
     }).Fatal("failed to get the latest ETH Block Number")
   }
   logger.WithFields(log.Fields{
     "caller":      "getEthBlockNumber",
-    "duration":    time.Since(start).Milliseconds(),
+    "durationMs":  time.Since(start).Milliseconds(),
     "ethBlockNum": ethBlockNum,
   }).Info("")
 
@@ -259,12 +282,12 @@ loop:
       break loop
     default:
       start = time.Now()
-      ethBlock, err := getEthBlock(apiKey, ethBlockNum)
+      ethBlock, err := getEthBlock(retryClient, apiKey, ethBlockNum)
       if err != nil {
         logger.WithFields(log.Fields{
           "caller":      "getEthBlock",
           "error":       err.Error(),
-          "duration":    time.Since(start).Milliseconds(),
+          "durationMs":  time.Since(start).Milliseconds(),
           "ethBlockNum": ethBlockNum,
         }).Error("failed to get the latest ETH Block")
       }
@@ -273,7 +296,7 @@ loop:
       if (Block{}) != ethBlock.Block {
         logger.WithFields(log.Fields{
           "caller":       "getEthBlock",
-          "duration":     time.Since(start).Milliseconds(),
+          "durationMs":   time.Since(start).Milliseconds(),
           "ethBlockHash": ethBlock.Block.Hash,
           "ethBlockNum":  ethBlockNum,
         }).Info("")
@@ -282,14 +305,14 @@ loop:
         ergUnconfirmedTxs, err := ergClient.getErgUnconfirmedTxs()
         if err != nil {
           logger.WithFields(log.Fields{
-            "caller":   "getErgUnconfirmedTxs",
-            "error":    err.Error(),
-            "duration": time.Since(start).Milliseconds(),
+            "caller":     "getErgUnconfirmedTxs",
+            "error":      err.Error(),
+            "durationMs": time.Since(start).Milliseconds(),
           }).Error("failed to get the latest ERG Unconfirmed Txs")
         }
         logger.WithFields(log.Fields{
-          "caller":   "getErgUnconfirmedTxs",
-          "duration": time.Since(start).Milliseconds(),
+          "caller":     "getErgUnconfirmedTxs",
+          "durationMs": time.Since(start).Milliseconds(),
         }).Info("")
 
         hash := &CombinedHashes{
@@ -367,15 +390,15 @@ loop:
           ergTxId, err := ergClient.postErgOracleTx(txToSign)
           if err != nil {
             logger.WithFields(log.Fields{
-              "caller":   "postErgOracleTx",
-              "error":    err.Error(),
-              "duration": time.Since(start).Milliseconds(),
+              "caller":     "postErgOracleTx",
+              "error":      err.Error(),
+              "durationMs": time.Since(start).Milliseconds(),
             }).Error("failed to create ERG Tx")
           }
           logger.WithFields(log.Fields{
-            "caller":   "postErgOracleTx",
-            "ergTxId":  string(ergTxId),
-            "duration": time.Since(start).Milliseconds(),
+            "caller":     "postErgOracleTx",
+            "ergTxId":    fmt.Sprintf("%s",ergTxId),
+            "durationMs": time.Since(start).Milliseconds(),
           }).Info("")
 
           createErgTxInterval = time.Now().Local().Add(time.Second * time.Duration(ErgTxInterval))
