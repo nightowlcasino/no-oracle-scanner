@@ -25,6 +25,7 @@
 ## About
 
 > The follow description is subject to change or may not be entirely acurate at the time of this writting.
+
 The no-oracle-scanner periodically calls the Etherscan api and gets the latest block hash as one part of the random number generation for some of the Nightowl Casino games. Once it obtains the newest ETH block hash it then collects all the ERG unconfirmed Txs which will be used in further generation of the Nightowl Casino game random number. Lastly, after a configured amount of time the no-oracle-scanner will then solidify these bets + random numbers onto the ERG blockchain.
 
 ## Build
