@@ -45,4 +45,4 @@ docker run -d -it -e ETHERSCAN_API_KEY='ABCDEF' \
 
 ## License
 
-MIT License, see [LICENSE](https://github.com/nightowlcasino/NightOwl-Backend/blob/main/LICENSE).
+MIT License, see [LICENSE](https://github.com/nightowlcasino/no-oracle-scanner/blob/main/LICENSE).
