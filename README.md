@@ -15,7 +15,7 @@
     <img src="https://img.shields.io/static/v1?label=Reddit&message=forum&color=FF4500&style=flat&logo=reddit"/>
   </a>
   <!-- mit license -->
-  <a href="https://github.com/nightowlcasino/NightOwl-Backend/blob/main/LICENSE">
+  <a href="https://github.com/nightowlcasino/no-oracle-scanner/blob/main/LICENSE">
     <img src="https://img.shields.io/static/v1?label=License&message=MIT&color=A31F34&style=flat"/>
   </a>
 </p>
