@@ -18,3 +18,12 @@ type EthBlock struct {
   Id      int    `json:"id"`
   Block   Block  `json:"result"`
 }
+
+type ErgTx struct {
+  Id string `json:"id"`
+}
+
+type ErgBlock struct {
+  HeaderId string  `json:"headerId"`
+  Txs      []ErgTx `json:"transactions"`
+}
