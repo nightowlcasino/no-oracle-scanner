@@ -39,7 +39,7 @@ const (
   getBlockTxsEndpoint           = "/blocks/"
   postErgOracleTxEndpoint       = "/wallet/transaction/send"
   oracleAddress                 = "4FC5xSYb7zfRdUhm6oRmE11P2GJqSMY8UARPbHkmXEq6hTinXq4XNWdJs73BEV44MdmJ49Qo"
-	rouletteErgoTree              = "1012040004000404054a0e203eff84aa4780a9cc612ed429b28c0cb2d17d5d6372a84c4050e68d234743042b0e20afd0d6cb61e86d15f2a0adc1e7e23df532ba3ff35f8ba88bed16729cae9330320400040205040404050f05120406050604080509050c040ad807d601b2a5730000d602b2db63087201730100d603e4c6a70404d6049e7cdb6801b2db6502fe9999a38cc7a7017302007303d6057ee4c6a7050405d6069972057204d607cb7304d1ed96830201938c7202017305938c7202028cb2db6308a7730600029597830501ed9372037307939e720473087205eded9372037309927206730a907206730bed937203730c939e7204730d7205eded937203730e927206730f9072067310ed9372037311937205720493c27201720793c272017207"
+  rouletteErgoTree              = "1012040004000404054a0e203eff84aa4780a9cc612ed429b28c0cb2d17d5d6372a84c4050e68d234743042b0e20afd0d6cb61e86d15f2a0adc1e7e23df532ba3ff35f8ba88bed16729cae9330320400040205040404050f05120406050604080509050c040ad807d601b2a5730000d602b2db63087201730100d603e4c6a70404d6049e7cdb6801b2db6502fe9999a38cc7a7017302007303d6057ee4c6a7050405d6069972057204d607cb7304d1ed96830201938c7202017305938c7202028cb2db6308a7730600029597830501ed9372037307939e720473087205eded9372037309927206730a907206730bed937203730c939e7204730d7205eded937203730e927206730f9072067310ed9372037311937205720493c27201720793c272017207"
   minerFee                      = 1500000 // 0.0015 ERG
   ErgTxInterval                 = 400     // Seconds
   CleanErgUnconfirmedTxInterval = 30      // Seconds
@@ -65,16 +65,16 @@ type unconfirmedTxs struct {
 var allErgUnconfirmedTxs unconfirmedTxs
 
 func (u *unconfirmedTxs) get(key string) (bool, bool) {
-	u.mu.Lock()
+  u.mu.Lock()
   defer u.mu.Unlock()
-	val, ok := u.untx[key]
-	return val, ok
+  val, ok := u.untx[key]
+  return val, ok
 }
 
 func (u *unconfirmedTxs) set(key string, value bool) {
-	u.mu.Lock()
+  u.mu.Lock()
   defer u.mu.Unlock()
-	u.untx[key] = value
+  u.untx[key] = value
 }
 
 func (u *unconfirmedTxs) delete(key string) {
@@ -191,9 +191,9 @@ func (e *ErgClient) unlockWallet() ([]byte, error) {
 }
 
 func (e *ErgClient) lockWallet() ([]byte, error) {
-	var ret []byte
+  var ret []byte
 
-	req, err := retryablehttp.NewRequest("GET", ergNodeFQDN + "/wallet/lock", nil)
+  req, err := retryablehttp.NewRequest("GET", ergNodeFQDN + "/wallet/lock", nil)
   if err != nil {
     return ret, fmt.Errorf("error creating erg node lock wallet request - %s", err.Error())
   }
@@ -218,12 +218,12 @@ func (e *ErgClient) lockWallet() ([]byte, error) {
 func (e *ErgClient) postErgOracleTx(payload []byte) ([]byte, error) {
   var ret []byte
 
-	_, err := e.unlockWallet()
-	if err != nil {
-		return ret, err
-	}
+  _, err := e.unlockWallet()
+  if err != nil {
+    return ret, err
+  }
 
-	defer e.lockWallet()
+  defer e.lockWallet()
 
   req, err := retryablehttp.NewRequest("POST", ergNodeFQDN + postErgOracleTxEndpoint, bytes.NewBuffer(payload))
   if err != nil {
@@ -347,7 +347,7 @@ func main() {
     logger.Fatal("ERG_NODE_PASS is a required env variable")
   }
 
-	if value, ok := os.LookupEnv("ERG_WALLET_PASS"); ok {
+  if value, ok := os.LookupEnv("ERG_WALLET_PASS"); ok {
     walletPassword = value
   } else {
     logger.Fatal("ERG_WALLET_PASS is a required env variable")
@@ -371,7 +371,7 @@ func main() {
     ergNodeFQDN = "https://node.nightowlcasino.io"
   }
 
-	if value, ok := os.LookupEnv("ERG_EXPLORER_FQDN"); ok {
+  if value, ok := os.LookupEnv("ERG_EXPLORER_FQDN"); ok {
     ergExplorerFQDN = "https://" + value
   } else {
     ergNodeFQDN = "https://api.nightowlcasino.io"
@@ -381,11 +381,11 @@ func main() {
   allErgUnconfirmedTxs.untx = make(map[string]bool)
   var start time.Time
 
-	// Connect to NATS server
+  // Connect to NATS server
   nc, err := nats.Connect(nats.DefaultURL)
-	if err != nil {
-		logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to connect to ':4222' nats server")
-	}
+  if err != nil {
+    logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to connect to ':4222' nats server")
+  }
 
   c := make(chan os.Signal, 1)
   signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -436,10 +436,10 @@ func main() {
     for {
       select {
       case <-cleanup:
-				cleanup <- true
+        cleanup <- true
         return
       default:
-				for k := range allErgUnconfirmedTxs.untx {
+        for k := range allErgUnconfirmedTxs.untx {
           // Call api explorer to see if tx is present and has atleast 3 confirmations
           req, err := retryablehttp.NewRequest("GET", ergExplorerFQDN + getErgTxsEndpoint + k, nil)
           if err != nil {
@@ -447,7 +447,7 @@ func main() {
           }
           req.Header.Set("no-scanner-func", "getErgTxs")
 
-					start = time.Now()
+          start = time.Now()
           resp, err := retryClient.Do(req)
           if err != nil {
             logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "durationMs": time.Since(start).Milliseconds(), "txId": k}).Error("failed 'getErgTxs' http response")
@@ -472,8 +472,8 @@ func main() {
               allErgUnconfirmedTxs.delete(k)
               logger.WithFields(log.Fields{"caller": "getErgTxs", "durationMs": time.Since(start).Milliseconds(), "txId": k}).Debug("removed tx from allErgUnconfirmedTxs hashmap")
             }
-					}
-				}
+          }
+        }
       }
       time.Sleep(CleanErgUnconfirmedTxInterval * time.Second)
     }
@@ -517,22 +517,22 @@ loop:
 
         for _, tx := range ergUnconfirmedTxs {
           // TODO: find a better algorithm to check for existing erg txs
-						if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
+          if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
             for _, box := range tx.Outputs {
-							if box.ErgoTree == rouletteErgoTree {
-								hash.Boxes = append(hash.Boxes, box.BoxId)
+              if box.ErgoTree == rouletteErgoTree {
+                hash.Boxes = append(hash.Boxes, box.BoxId)
                 allErgUnconfirmedTxs.set(tx.Id, true)
-							}
+              }
             }
           }
         }
 
         hashBytes, _ := json.Marshal(hash)
-				nc.Publish("eth.hash", hashBytes)
+        nc.Publish("eth.hash", hashBytes)
 
         logger.WithFields(log.Fields{"sliceLen": len(combinedHashes) + 1, "numErgBoxes": len(hash.Boxes), "newHash": string(hashBytes)}).Info("appending to combinedHashes")
 
-				combinedHashes = append(combinedHashes, *hash)
+        combinedHashes = append(combinedHashes, *hash)
 
         // increment hex by 1
         res, err := strconv.ParseInt(ethBlockNum[2:], 16, 0)
@@ -580,7 +580,7 @@ loop:
           }
           logger.WithFields(log.Fields{"caller": "postErgOracleTx", "ergTxId": fmt.Sprintf("%s",ergTxId), "durationMs": time.Since(start).Milliseconds()}).Info("")
 
-					combinedHashes = nil
+          combinedHashes = nil
 
           createErgTxInterval = time.Now().Local().Add(time.Second * time.Duration(ErgTxInterval))
         }
