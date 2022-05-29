@@ -20,7 +20,14 @@ type EthBlock struct {
 }
 
 type ErgTx struct {
-  Id string `json:"id"`
+  Id            string        `json:"id"`
+	Confirmations int           `json:"numConfirmations,omitempty"`
+  Outputs       []ErgTxOutput `json:"outputs"`
+}
+
+type ErgTxOutput struct {
+  BoxId    string `json:"boxId"`
+	ErgoTree string `json:"ergoTree"`
 }
 
 type ErgBlock struct {

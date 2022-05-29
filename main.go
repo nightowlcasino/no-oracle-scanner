@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
+	"github.com/nats-io/nats.go"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,23 +33,27 @@ const (
   blockNumberEndpoint           = "/api?module=proxy&action=eth_blockNumber"
   getBlockByNumberEndpoint      = "/api?module=proxy&action=eth_getBlockByNumber"
   getErgUnconfirmedTxsEndpoint  = "/transactions/unconfirmed"
+  getErgTxsEndpoint             = "/api/v1/transactions/"
   getLatestBlockHeightEndpoint  = "/blocks/lastHeaders/1"
   getBlocksAtHeightEndpoint     = "/blocks/at/"
   getBlockTxsEndpoint           = "/blocks/"
   postErgOracleTxEndpoint       = "/wallet/transaction/send"
   oracleAddress                 = "4FC5xSYb7zfRdUhm6oRmE11P2GJqSMY8UARPbHkmXEq6hTinXq4XNWdJs73BEV44MdmJ49Qo"
+	rouletteErgoTree              = "1012040004000404054a0e203eff84aa4780a9cc612ed429b28c0cb2d17d5d6372a84c4050e68d234743042b0e20afd0d6cb61e86d15f2a0adc1e7e23df532ba3ff35f8ba88bed16729cae9330320400040205040404050f05120406050604080509050c040ad807d601b2a5730000d602b2db63087201730100d603e4c6a70404d6049e7cdb6801b2db6502fe9999a38cc7a7017302007303d6057ee4c6a7050405d6069972057204d607cb7304d1ed96830201938c7202017305938c7202028cb2db6308a7730600029597830501ed9372037307939e720473087205eded9372037309927206730a907206730bed937203730c939e7204730d7205eded937203730e927206730f9072067310ed9372037311937205720493c27201720793c272017207"
   minerFee                      = 1500000 // 0.0015 ERG
   ErgTxInterval                 = 400     // Seconds
-	CleanErgUnconfirmedTxInterval = 30     // Seconds
+  CleanErgUnconfirmedTxInterval = 30      // Seconds
   getEthBlockDelay              = 500     // Milliseconds
 )
 
 var apiKey string
 var nodeUser string
 var nodePassword string
+var walletPassword string
 var ergNodeApiKey string
 var hostname string
 var ergNodeFQDN string
+var ergExplorerFQDN string
 var etherscanFQDN string
 
 var combinedHashes []CombinedHashes
@@ -58,6 +63,19 @@ type unconfirmedTxs struct {
   untx map[string]bool
 }
 var allErgUnconfirmedTxs unconfirmedTxs
+
+func (u *unconfirmedTxs) get(key string) (bool, bool) {
+	u.mu.Lock()
+  defer u.mu.Unlock()
+	val, ok := u.untx[key]
+	return val, ok
+}
+
+func (u *unconfirmedTxs) set(key string, value bool) {
+	u.mu.Lock()
+  defer u.mu.Unlock()
+	u.untx[key] = value
+}
 
 func (u *unconfirmedTxs) delete(key string) {
   u.mu.Lock()
@@ -141,14 +159,71 @@ func (e *ErgClient) getErgUnconfirmedTxs() ([]ErgTx, error) {
 
   err = json.Unmarshal(body, &txs)
   if err != nil {
-    return txs, fmt.Errorf("error unmarshalling EthBlock - %s", err.Error())
+    return txs, fmt.Errorf("error unmarshalling ERG unconfirmed Txs - %s", err.Error())
   }
 
   return txs, nil
 }
 
+func (e *ErgClient) unlockWallet() ([]byte, error) {
+  var ret []byte
+
+  req, err := retryablehttp.NewRequest("POST", ergNodeFQDN + "/wallet/unlock", bytes.NewBuffer([]byte(fmt.Sprintf("{\"pass\": \"%s\"}", walletPassword))))
+  if err != nil {
+    return ret, fmt.Errorf("error creating erg node lock wallet request - %s", err.Error())
+  }
+  req.SetBasicAuth(nodeUser, nodePassword)
+  req.Header.Set("api_key", ergNodeApiKey)
+  req.Header.Set("no-scanner-func", "lockWallet")
+  req.Header.Set("Content-Type", "application/json")
+
+  resp, err := e.client.Do(req)
+  if err != nil {
+    return ret, fmt.Errorf("error locking erg node wallet - %s", err.Error())
+  }
+
+  ret, err = ioutil.ReadAll(resp.Body)
+  if err != nil {
+    return ret, fmt.Errorf("error parsing erg node lock response - %s", err.Error())
+  }
+
+  return ret, nil
+}
+
+func (e *ErgClient) lockWallet() ([]byte, error) {
+	var ret []byte
+
+	req, err := retryablehttp.NewRequest("GET", ergNodeFQDN + "/wallet/lock", nil)
+  if err != nil {
+    return ret, fmt.Errorf("error creating erg node lock wallet request - %s", err.Error())
+  }
+  req.SetBasicAuth(nodeUser, nodePassword)
+  req.Header.Set("api_key", ergNodeApiKey)
+  req.Header.Set("no-scanner-func", "lockWallet")
+  req.Header.Set("Content-Type", "application/json")
+
+  resp, err := e.client.Do(req)
+  if err != nil {
+    return ret, fmt.Errorf("error locking erg node wallet - %s", err.Error())
+  }
+
+  ret, err = ioutil.ReadAll(resp.Body)
+  if err != nil {
+    return ret, fmt.Errorf("error parsing erg node lock response - %s", err.Error())
+  }
+
+  return ret, nil
+}
+
 func (e *ErgClient) postErgOracleTx(payload []byte) ([]byte, error) {
   var ret []byte
+
+	_, err := e.unlockWallet()
+	if err != nil {
+		return ret, err
+	}
+
+	defer e.lockWallet()
 
   req, err := retryablehttp.NewRequest("POST", ergNodeFQDN + postErgOracleTxEndpoint, bytes.NewBuffer(payload))
   if err != nil {
@@ -272,6 +347,12 @@ func main() {
     logger.Fatal("ERG_NODE_PASS is a required env variable")
   }
 
+	if value, ok := os.LookupEnv("ERG_WALLET_PASS"); ok {
+    walletPassword = value
+  } else {
+    logger.Fatal("ERG_WALLET_PASS is a required env variable")
+  }
+
   if value, ok := os.LookupEnv("ERG_NODE_API_KEY"); ok {
     ergNodeApiKey = value
   } else {
@@ -281,20 +362,30 @@ func main() {
   if value, ok := os.LookupEnv("ETHERSCAN_FQDN"); ok {
     etherscanFQDN = "https://" + value
   } else {
-    //etherscanFQDN = "https://api.etherscan.io"
-    etherscanFQDN = "http://localhost:8099"
+    etherscanFQDN = "https://api.etherscan.io"
   }
 
   if value, ok := os.LookupEnv("ERG_NODE_FQDN"); ok {
     ergNodeFQDN = "https://" + value
   } else {
-    //ergNodeFQDN = "https://node.nightowlcasino.io"
-    ergNodeFQDN = "http://localhost:8099"
+    ergNodeFQDN = "https://node.nightowlcasino.io"
+  }
+
+	if value, ok := os.LookupEnv("ERG_EXPLORER_FQDN"); ok {
+    ergExplorerFQDN = "https://" + value
+  } else {
+    ergNodeFQDN = "https://api.nightowlcasino.io"
   }
 
   cleanup := make(chan bool)
   allErgUnconfirmedTxs.untx = make(map[string]bool)
   var start time.Time
+
+	// Connect to NATS server
+  nc, err := nats.Connect(nats.DefaultURL)
+	if err != nil {
+		logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to connect to ':4222' nats server")
+	}
 
   c := make(chan os.Signal, 1)
   signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -341,18 +432,52 @@ func main() {
   }
 
   // go routine to periodically clean erg Unconfirmed Txs hash map
-  go func(ergClient *ErgClient, logger *log.Entry) {
+  go func(retryClient *retryablehttp.Client, logger *log.Entry) {
     for {
       select {
       case <-cleanup:
 				cleanup <- true
         return
       default:
-        logger.Info("Get current Erg Height")
+				for k := range allErgUnconfirmedTxs.untx {
+          // Call api explorer to see if tx is present and has atleast 3 confirmations
+          req, err := retryablehttp.NewRequest("GET", ergExplorerFQDN + getErgTxsEndpoint + k, nil)
+          if err != nil {
+            logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to build 'getErgTxsEndpoint' http request")
+          }
+          req.Header.Set("no-scanner-func", "getErgTxs")
+
+					start = time.Now()
+          resp, err := retryClient.Do(req)
+          if err != nil {
+            logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "durationMs": time.Since(start).Milliseconds(), "txId": k}).Error("failed 'getErgTxs' http response")
+          }
+          logger.WithFields(log.Fields{"caller": "getErgTxs", "durationMs": time.Since(start).Milliseconds(), "txId": k}).Debug("")
+
+          defer resp.Body.Close()
+
+          body, err := ioutil.ReadAll(resp.Body)
+          if err != nil {
+            logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "txId": k}).Error("error reading 'getErgTxs' response body")
+          }
+
+          if resp.StatusCode == 200 {
+            var tx ErgTx
+            err = json.Unmarshal(body, &tx)
+            if err != nil {
+              logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "txId": k}).Error("error unmarshalling 'getErgTxs' response body")
+            }
+
+            if tx.Confirmations >= 3 {
+              allErgUnconfirmedTxs.delete(k)
+              logger.WithFields(log.Fields{"caller": "getErgTxs", "durationMs": time.Since(start).Milliseconds(), "txId": k}).Debug("removed tx from allErgUnconfirmedTxs hashmap")
+            }
+					}
+				}
       }
       time.Sleep(CleanErgUnconfirmedTxInterval * time.Second)
     }
-  }(ergClient, logger)
+  }(retryClient, logger)
 
   start = time.Now()
   ethBlockNum, err := getEthBlockNumber(retryClient, apiKey)
@@ -391,18 +516,23 @@ loop:
         }
 
         for _, tx := range ergUnconfirmedTxs {
-          // TODO: find a better algorithm to check for existing erg txs}
-          if _, ok := allErgUnconfirmedTxs.untx[tx.Id]; !ok {
-            hash.Boxes = append(hash.Boxes, tx.Id)
-            allErgUnconfirmedTxs.untx[tx.Id] = true
+          // TODO: find a better algorithm to check for existing erg txs
+						if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
+            for _, box := range tx.Outputs {
+							if box.ErgoTree == rouletteErgoTree {
+								hash.Boxes = append(hash.Boxes, box.BoxId)
+                allErgUnconfirmedTxs.set(tx.Id, true)
+							}
+            }
           }
         }
 
         hashBytes, _ := json.Marshal(hash)
+				nc.Publish("eth.hash", hashBytes)
 
         logger.WithFields(log.Fields{"sliceLen": len(combinedHashes) + 1, "numErgBoxes": len(hash.Boxes), "newHash": string(hashBytes)}).Info("appending to combinedHashes")
 
-        combinedHashes = append([]CombinedHashes{*hash}, combinedHashes...)
+				combinedHashes = append(combinedHashes, *hash)
 
         // increment hex by 1
         res, err := strconv.ParseInt(ethBlockNum[2:], 16, 0)
@@ -412,13 +542,6 @@ loop:
         ethBlockNum = fmt.Sprintf("0x%x", res+1)
 
         if time.Now().Local().After(createErgTxInterval) {
-          // Remove last 40 elements of []CombinedHashes else remove the last len()/2
-          if len(combinedHashes) > 40 {
-            combinedHashes = combinedHashes[:len(combinedHashes)-40]
-          } else {
-            combinedHashes = combinedHashes[:len(combinedHashes)-(len(combinedHashes)/2)]
-          }
-          reverse(&combinedHashes)
 
           r4 := "1a" + fmt.Sprintf("%02x", len(combinedHashes))
           r5 := "0c1a" + fmt.Sprintf("%02x", len(combinedHashes))
@@ -456,6 +579,8 @@ loop:
             logger.WithFields(log.Fields{"caller": "postErgOracleTx", "error": err.Error(), "durationMs": time.Since(start).Milliseconds()}).Error("failed to create ERG Tx")
           }
           logger.WithFields(log.Fields{"caller": "postErgOracleTx", "ergTxId": fmt.Sprintf("%s",ergTxId), "durationMs": time.Since(start).Milliseconds()}).Info("")
+
+					combinedHashes = nil
 
           createErgTxInterval = time.Now().Local().Add(time.Second * time.Duration(ErgTxInterval))
         }
