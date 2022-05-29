@@ -40,6 +40,7 @@ docker run -d -it -e ETHERSCAN_API_KEY='ABCDEF' \
 -e ERG_NODE_USER='user' \
 -e ERG_NODE_PASS='password' \
 -e ERG_NODE_API_KEY='abcdef' \
+-e ERG_WALLET_PASS='ghijkl' \
 --name no-oracle-scanner no-oracle-scanner:<tag>
 ```
 
