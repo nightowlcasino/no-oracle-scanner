@@ -374,7 +374,7 @@ func main() {
   if value, ok := os.LookupEnv("ERG_EXPLORER_FQDN"); ok {
     ergExplorerFQDN = "https://" + value
   } else {
-    ergNodeFQDN = "https://api.nightowlcasino.io"
+    ergExplorerFQDN = "https://api.ergoplatform.com"
   }
 
   cleanup := make(chan bool)
