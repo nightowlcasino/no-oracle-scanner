@@ -451,6 +451,7 @@ func main() {
           resp, err := retryClient.Do(req)
           if err != nil {
             logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "durationMs": time.Since(start).Milliseconds(), "txId": k}).Error("failed 'getErgTxs' http response")
+            continue
           }
           logger.WithFields(log.Fields{"caller": "getErgTxs", "durationMs": time.Since(start).Milliseconds(), "txId": k}).Debug("")
 
@@ -459,6 +460,7 @@ func main() {
           body, err := ioutil.ReadAll(resp.Body)
           if err != nil {
             logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "txId": k}).Error("error reading 'getErgTxs' response body")
+            continue
           }
 
           if resp.StatusCode == 200 {
@@ -466,6 +468,7 @@ func main() {
             err = json.Unmarshal(body, &tx)
             if err != nil {
               logger.WithFields(log.Fields{"caller": "getErgTxs", "error": err.Error(), "txId": k}).Error("error unmarshalling 'getErgTxs' response body")
+              continue
             }
 
             if tx.Confirmations >= 3 {
