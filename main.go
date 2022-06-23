@@ -375,7 +375,7 @@ func main() {
 	if value, ok := os.LookupEnv("ERG_EXPLORER_FQDN"); ok {
 		ergExplorerFQDN = "https://" + value
 	} else {
-		ergExplorerFQDN = "https://api.ergoplatform.com"
+		ergExplorerFQDN = "https://ergo-explorer-cdn.getblok.io"
 	}
 
 	cleanup := make(chan bool)
@@ -385,7 +385,7 @@ func main() {
 	// Connect to NATS server
 	nc, err := nats.Connect(nats.DefaultURL)
 	if err != nil {
-		logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to connect to ':4222' nats server")
+		logger.WithFields(log.Fields{"error": err.Error()}).Error("failed to connect to ':4222' nats server")
 	}
 
 	c := make(chan os.Signal, 1)
@@ -523,10 +523,10 @@ loop:
 					// TODO: find a better algorithm to check for existing erg txs
 					if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
 						for _, box := range tx.Outputs {
-							if box.ErgoTree == rouletteErgoTree {
+							//if box.ErgoTree == rouletteErgoTree {
 								hash.Boxes = append(hash.Boxes, box.BoxId)
 								allErgUnconfirmedTxs.set(tx.Id, true)
-							}
+							//}
 						}
 					}
 				}
@@ -562,20 +562,20 @@ loop:
 
 					// Build Erg Tx for node to sign
 					txToSign := []byte(fmt.Sprintf(`{
-            "requests": [
-              {
-                "address": "%s",
-                "value": %d,
-                "assets": [],
-                "registers": {
-                  "R4": "%s",
-                  "R5": "%s"
-                }
-              }
-            ],
-            "fee": %d,
-            "inputsRaw": []
-          }`, oracleAddress, minerFee, r4, r5, minerFee))
+            			"requests": [
+              				{
+                				"address": "%s",
+                				"value": %d,
+                				"assets": [],
+                				"registers": {
+                  					"R4": "%s",
+                  					"R5": "%s"
+                				}
+              				}
+            			],
+            			"fee": %d,
+            			"inputsRaw": []
+          			}`, oracleAddress, minerFee, r4, r5, minerFee))
 
 					start = time.Now()
 					ergTxId, err := ergClient.postErgOracleTx(txToSign)
