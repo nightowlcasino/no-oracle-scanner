@@ -1,6 +1,6 @@
 module github.com/nightowlcasino/no-oracle-scanner
 
-go 1.17
+go 1.18
 
 require (
 	github.com/hashicorp/go-retryablehttp v0.7.1

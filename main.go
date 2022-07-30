@@ -19,16 +19,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type ErgClient struct {
-	client *retryablehttp.Client
-	req    *retryablehttp.Request
-}
-
-type CombinedHashes struct {
-	Hash  string   `json:"hash"`
-	Boxes []string `json:"boxes"`
-}
-
 const (
 	blockNumberEndpoint           = "/api?module=proxy&action=eth_blockNumber"
 	getBlockByNumberEndpoint      = "/api?module=proxy&action=eth_getBlockByNumber"
@@ -39,31 +29,48 @@ const (
 	getBlockTxsEndpoint           = "/blocks/"
 	postErgOracleTxEndpoint       = "/wallet/transaction/send"
 	oracleAddress                 = "4FC5xSYb7zfRdUhm6oRmE11P2GJqSMY8UARPbHkmXEq6hTinXq4XNWdJs73BEV44MdmJ49Qo"
-	rouletteErgoTree              = "1012040004000404054a0e203eff84aa4780a9cc612ed429b28c0cb2d17d5d6372a84c4050e68d234743042b0e20afd0d6cb61e86d15f2a0adc1e7e23df532ba3ff35f8ba88bed16729cae9330320400040205040404050f05120406050604080509050c040ad807d601b2a5730000d602b2db63087201730100d603e4c6a70404d6049e7cdb6801b2db6502fe9999a38cc7a7017302007303d6057ee4c6a7050405d6069972057204d607cb7304d1ed96830201938c7202017305938c7202028cb2db6308a7730600029597830501ed9372037307939e720473087205eded9372037309927206730a907206730bed937203730c939e7204730d7205eded937203730e927206730f9072067310ed9372037311937205720493c27201720793c272017207"
+	rouletteErgoTree              = "101b0400040004000402054a0e20473041c7e13b5f5947640f79f00d3c5df22fad4841191260350bb8c526f9851f040004000514052605380504050404020400040205040404050f05120406050604080509050c040a0e200ef2e4e25f93775412ac620a1da495943c55ea98e72f3e95d1a18d7ace2f676cd809d601b2a5730000d602b2db63087201730100d603b2db6501fe730200d604e4c672010404d605e4c6a70404d6069e7cb2e4c67203041a9a72047303007304d607e4c6a70504d6087e720705d6099972087206d1ed96830301938c7202017305938c7202028cb2db6308a77306000293b2b2e4c67203050c1a720400e4c67201050400c5a79597830601ed937205730795ec9072067308ed9272067309907206730a939e7206730b7208ed949e7206730c7208ec937207730d937207730eed937205730f939e720673107208eded937205731192720973129072097313ed9372057314939e720673157208eded937205731692720973179072097318ed9372057319937208720693c27201e4c6a7060e93cbc27201731a"
 	minerFee                      = 1500000 // 0.0015 ERG
-	ErgTxInterval                 = 400     // Seconds
+	//oracleValue                   = 2000000 // 0.0020 ERG
+	ErgTxInterval                 = 200//400     // Seconds
 	CleanErgUnconfirmedTxInterval = 30      // Seconds
 	getEthBlockDelay              = 500     // Milliseconds
 )
 
-var apiKey string
-var nodeUser string
-var nodePassword string
-var walletPassword string
-var ergNodeApiKey string
-var hostname string
-var ergNodeFQDN string
-var ergExplorerFQDN string
-var etherscanFQDN string
+var (
+	apiKey string
+    nodeUser string
+    nodePassword string
+    walletPassword string
+    ergNodeApiKey string
+    hostname string
+    ergNodeFQDN string
+    ergExplorerFQDN string
+    etherscanFQDN string
+	oracleValue int
+	testMode = true
+	numErgBoxes int
 
-var combinedHashes []CombinedHashes
+	combinedHashes []CombinedHashes
+	allErgUnconfirmedTxs unconfirmedTxs
+
+	baseOracleTxStringBytes = []byte(fmt.Sprintf(`{"requests": [{"address": "%s","value": ,"assets": [],"registers": {"R4": "","R5": ""}}],"fee": %d,"inputsRaw": []}`, oracleAddress, minerFee))
+)
+
+type ErgClient struct {
+	client *retryablehttp.Client
+	req    *retryablehttp.Request
+}
+
+type CombinedHashes struct {
+	Hash  string   `json:"hash"`
+	Boxes []string `json:"boxes"`
+}
 
 type unconfirmedTxs struct {
 	mu   sync.Mutex
 	untx map[string]bool
 }
-
-var allErgUnconfirmedTxs unconfirmedTxs
 
 func (u *unconfirmedTxs) get(key string) (bool, bool) {
 	u.mu.Lock()
@@ -91,7 +98,6 @@ func getEthBlockNumber(client *retryablehttp.Client, apiKey string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("error creating getEthBlockNumber request - %s", err.Error())
 	}
-	req.Header.Set("no-scanner-func", "getEthBlockNumber")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -123,7 +129,6 @@ func getEthBlock(client *retryablehttp.Client, apiKey, blockNum string) (EthBloc
 	if err != nil {
 		return ethBlock, fmt.Errorf("error creating getEthBlock request - %s", err.Error())
 	}
-	req.Header.Set("no-scanner-func", "getEthBlock")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -175,7 +180,6 @@ func (e *ErgClient) unlockWallet() ([]byte, error) {
 	}
 	req.SetBasicAuth(nodeUser, nodePassword)
 	req.Header.Set("api_key", ergNodeApiKey)
-	req.Header.Set("no-scanner-func", "lockWallet")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := e.client.Do(req)
@@ -200,7 +204,6 @@ func (e *ErgClient) lockWallet() ([]byte, error) {
 	}
 	req.SetBasicAuth(nodeUser, nodePassword)
 	req.Header.Set("api_key", ergNodeApiKey)
-	req.Header.Set("no-scanner-func", "lockWallet")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := e.client.Do(req)
@@ -232,7 +235,6 @@ func (e *ErgClient) postErgOracleTx(payload []byte) ([]byte, error) {
 	}
 	req.SetBasicAuth(nodeUser, nodePassword)
 	req.Header.Set("api_key", ergNodeApiKey)
-	req.Header.Set("no-scanner-func", "postErgOracleTx")
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := e.client.Do(req)
@@ -256,7 +258,6 @@ func (e *ErgClient) getErgBoxes(blockHeight string) ([]string, error) {
 		return boxes, fmt.Errorf("error creating getErgBoxes request - %s", err.Error())
 	}
 	req.SetBasicAuth(nodeUser, nodePassword)
-	req.Header.Set("no-scanner-func", "getErgBoxes")
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -284,7 +285,6 @@ func (e *ErgClient) getErgTxs(blockId string) (ErgBlock, error) {
 		return ergBlock, fmt.Errorf("error creating getErgTxs request - %s", err.Error())
 	}
 	req.SetBasicAuth(nodeUser, nodePassword)
-	req.Header.Set("no-scanner-func", "getErgTxs")
 
 	resp, err := e.client.Do(req)
 	if err != nil {
@@ -309,6 +309,10 @@ func reverse(ch *[]CombinedHashes) {
 		(*ch)[i], (*ch)[j] = (*ch)[j], (*ch)[i]
 	}
 }
+
+//func calcTxValue() {
+//
+//}
 
 func main() {
 
@@ -408,7 +412,7 @@ func main() {
 
 	retryClient := retryablehttp.NewClient()
 	retryClient.HTTPClient.Transport = t
-	retryClient.HTTPClient.Timeout = time.Second * 3
+	retryClient.HTTPClient.Timeout = time.Second * 5
 	retryClient.Logger = nil
 	retryClient.RetryWaitMin = 100 * time.Millisecond
 	retryClient.RetryWaitMax = 150 * time.Millisecond
@@ -416,7 +420,7 @@ func main() {
 	retryClient.RequestLogHook = func(l retryablehttp.Logger, r *http.Request, i int) {
 		retryCount := i
 		if retryCount > 0 {
-			logger.WithFields(log.Fields{"caller": r.Header.Get("no-scanner-func"), "retryCount": retryCount}).Errorf("func call to %s failed retrying", r.Header.Get("no-scanner-func"))
+			logger.WithFields(log.Fields{"caller": r.URL.Path, "retryCount": retryCount}).Errorf("func call to %s failed retrying", r.URL.String())
 		}
 	}
 
@@ -424,7 +428,6 @@ func main() {
 	if err != nil {
 		logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to build 'getErgUnconfirmedTxsEndpoint' http request")
 	}
-	req.Header.Set("no-scanner-func", "getErgUnconfirmedTxs")
 	req.SetBasicAuth(nodeUser, nodePassword)
 
 	ergClient := &ErgClient{
@@ -446,7 +449,6 @@ func main() {
 					if err != nil {
 						logger.WithFields(log.Fields{"error": err.Error()}).Fatal("failed to build 'getErgTxsEndpoint' http request")
 					}
-					req.Header.Set("no-scanner-func", "getErgTxs")
 
 					start = time.Now()
 					resp, err := retryClient.Do(req)
@@ -508,10 +510,12 @@ loop:
 			if (Block{}) != ethBlock.Block {
 				logger.WithFields(log.Fields{"caller": "getEthBlock", "durationMs": time.Since(start).Milliseconds(), "ethBlockHash": ethBlock.Block.Hash, "ethBlockNum": ethBlockNum}).Info("")
 
+				// Figure out a better way to continually get these
 				start = time.Now()
 				ergUnconfirmedTxs, err := ergClient.getErgUnconfirmedTxs()
 				if err != nil {
 					logger.WithFields(log.Fields{"caller": "getErgUnconfirmedTxs", "error": err.Error(), "durationMs": time.Since(start).Milliseconds()}).Error("failed to get the latest ERG Unconfirmed Txs")
+					continue
 				}
 				logger.WithFields(log.Fields{"caller": "getErgUnconfirmedTxs", "durationMs": time.Since(start).Milliseconds()}).Info("")
 
@@ -523,13 +527,15 @@ loop:
 					// TODO: find a better algorithm to check for existing erg txs
 					if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
 						for _, box := range tx.Outputs {
-							//if box.ErgoTree == rouletteErgoTree {
+							if box.ErgoTree == rouletteErgoTree {
 								hash.Boxes = append(hash.Boxes, box.BoxId)
 								allErgUnconfirmedTxs.set(tx.Id, true)
-							//}
+								numErgBoxes += 1
+							}
 						}
 					}
 				}
+				//////////////////////////////////
 
 				hashBytes, _ := json.Marshal(hash)
 				nc.Publish("eth.hash", hashBytes)
@@ -545,46 +551,70 @@ loop:
 				}
 				ethBlockNum = fmt.Sprintf("0x%x", res+1)
 
+				// Need to send ERG oracle tx after configured time or when tx byte size is greater than 2777
+				combinedHashesLen := len(combinedHashes)
+				r4BytesLen := combinedHashesLen + 1 + (33 * combinedHashesLen)
+				r5BytesLen := combinedHashesLen + 2 + (33 * combinedHashesLen)
+				totalTxBytesLen := len(baseOracleTxStringBytes) + r4BytesLen + r5BytesLen
+				//fmt.Printf("number of bytes baseOracleTxStringBytes - %d\n", len(baseOracleTxStringBytes))
+				//fmt.Printf("number of bytes r4 - %d\n", combinedHashesLen + 1 + (33 * combinedHashesLen))
+				//fmt.Printf("number of bytes r5 - %d\n", combinedHashesLen + 2 + (33 * combinedHashesLen))
+				//fmt.Printf("total tx bytes - %d\n", totalTxBytesLen)
+				//fmt.Printf("tx value - %d\n", totalTxBytesLen * 360)
 				if time.Now().Local().After(createErgTxInterval) {
 
-					r4 := "1a" + fmt.Sprintf("%02x", len(combinedHashes))
-					r5 := "0c1a" + fmt.Sprintf("%02x", len(combinedHashes))
+					if numErgBoxes > 0 {
+						// use minimum tx value if tx byte size is less than 2778
+						if totalTxBytesLen < 2778 {
+							oracleValue = 1000000
+						}
 
-					for _, elem := range combinedHashes {
-						r4 = r4 + "20" + elem.Hash[2:]
-						boxLen := len(elem.Boxes)
+						r4 := "1a" + fmt.Sprintf("%02x", len(combinedHashes))
+						r5 := "0c1a" + fmt.Sprintf("%02x", len(combinedHashes))
 
-						r5 = r5 + fmt.Sprintf("%02x", boxLen)
-						for _, box := range elem.Boxes {
-							r5 = r5 + "20" + box
+						for _, elem := range combinedHashes {
+							r4 = r4 + "20" + elem.Hash[2:]
+							boxLen := len(elem.Boxes)
+
+							r5 = r5 + fmt.Sprintf("%02x", boxLen)
+							for _, box := range elem.Boxes {
+								r5 = r5 + "20" + box
+							}
+						}
+
+						// Build Erg Tx for node to sign
+						txToSign := []byte(fmt.Sprintf(`{
+            				"requests": [
+              					{
+                					"address": "%s",
+                					"value": %d,
+                					"assets": [],
+                					"registers": {
+                  						"R4": "%s",
+                  						"R5": "%s"
+                					}
+              					}
+            				],
+            				"fee": %d,
+            				"inputsRaw": []
+          				}`, oracleAddress, oracleValue, r4, r5, minerFee))
+
+						start = time.Now()
+						ergTxId, err := ergClient.postErgOracleTx(txToSign)
+						if err != nil {
+							// TODO: better retry and error handling here
+							logger.WithFields(log.Fields{"caller": "postErgOracleTx", "error": err.Error(), "durationMs": time.Since(start).Milliseconds()}).Error("failed to create ERG Tx")
+						} else {
+							logger.WithFields(log.Fields{"caller": "postErgOracleTx", "ergTxId": fmt.Sprintf("%s", ergTxId), "durationMs": time.Since(start).Milliseconds()}).Info("")
 						}
 					}
 
-					// Build Erg Tx for node to sign
-					txToSign := []byte(fmt.Sprintf(`{
-            			"requests": [
-              				{
-                				"address": "%s",
-                				"value": %d,
-                				"assets": [],
-                				"registers": {
-                  					"R4": "%s",
-                  					"R5": "%s"
-                				}
-              				}
-            			],
-            			"fee": %d,
-            			"inputsRaw": []
-          			}`, oracleAddress, minerFee, r4, r5, minerFee))
-
-					start = time.Now()
-					ergTxId, err := ergClient.postErgOracleTx(txToSign)
-					if err != nil {
-						logger.WithFields(log.Fields{"caller": "postErgOracleTx", "error": err.Error(), "durationMs": time.Since(start).Milliseconds()}).Error("failed to create ERG Tx")
+					// keep the last 2 indicies
+					combinedHashes = combinedHashes[len(combinedHashes)-2:]
+					numErgBoxes = 0
+					for _, h := range combinedHashes {
+						numErgBoxes += len(h.Boxes)
 					}
-					logger.WithFields(log.Fields{"caller": "postErgOracleTx", "ergTxId": fmt.Sprintf("%s", ergTxId), "durationMs": time.Since(start).Milliseconds()}).Info("")
-
-					combinedHashes = nil
 
 					createErgTxInterval = time.Now().Local().Add(time.Second * time.Duration(ErgTxInterval))
 				}
