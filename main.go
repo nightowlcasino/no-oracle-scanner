@@ -47,6 +47,7 @@ var (
     ergNodeFQDN string
     ergExplorerFQDN string
     etherscanFQDN string
+	natsEndpoint string
 	oracleValue int
 	testMode = true
 	numErgBoxes int
@@ -380,6 +381,12 @@ func main() {
 		ergExplorerFQDN = "https://" + value
 	} else {
 		ergExplorerFQDN = "https://ergo-explorer-cdn.getblok.io"
+	}
+
+	if value, ok := os.LookupEnv("NATS_ENDPOINT"); ok {
+		natsEndpoint = value
+	} else {
+		natsEndpoint = "nats://nats.nightowlcasino.io:4222"
 	}
 
 	cleanup := make(chan bool)
