@@ -394,9 +394,9 @@ func main() {
 	var start time.Time
 
 	// Connect to NATS server
-	nc, err := nats.Connect(nats.DefaultURL)
+	nc, err := nats.Connect(natsEndpoint)
 	if err != nil {
-		logger.WithFields(log.Fields{"error": err.Error()}).Error("failed to connect to ':4222' nats server")
+		logger.WithFields(log.Fields{"error": err.Error()}).Errorf("failed to connect to '%s' nats server", natsEndpoint)
 	}
 
 	c := make(chan os.Signal, 1)
