@@ -51,7 +51,7 @@ type CombinedHashes struct {
 }
 
 type unconfirmedTxs struct {
-	mu   *sync.Mutex
+	mu   sync.Mutex
 	untx map[string]bool
 }
 
