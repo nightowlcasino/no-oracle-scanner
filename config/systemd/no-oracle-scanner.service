@@ -1,0 +1,14 @@
+[Unit]
+Description=nightowl oracle scanner
+After=syslog.target network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/etc/no-oracle-scanner
+ExecStart=/usr/local/bin/no-oracle-scanner --config config.yaml
+ExecStop=/bin/kill -15 $MAINPID
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
