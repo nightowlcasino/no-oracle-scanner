@@ -1,0 +1,26 @@
+logging:
+  level: info
+
+nightowl:
+  test_mode: true
+
+ergo_node:
+  fqdn: "213.239.193.208"
+  scheme: "http"
+  port: 9053
+  user: "user"
+  password: "pass123"
+  api_key: "abcdef1234"
+  wallet_password: "wallPass"
+
+explorer_node:
+  fqdn: "api.ergoplatform.com"
+  scheme: "https"
+  port: 443
+
+metrics:
+  port: 8090
+
+nats:
+  endpoints: "nats://0.0.0.0:4222"
+  random_number_subj: "drand.hash"

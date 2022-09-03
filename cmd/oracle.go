@@ -8,6 +8,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nightowlcasino/nightowl/logger"
+	"github.com/nightowlcasino/no-oracle-scanner/controller"
 	"github.com/nightowlcasino/no-oracle-scanner/scanner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -83,6 +84,7 @@ func initConfig() {
 	viper.SetDefault("ergo_node.port", 9053)
 	viper.SetDefault("nats.random_number_subj", "drand.hash")
 	viper.SetDefault("nightowl.test_mode", false)
+	viper.SetDefault("metrics.port", 8090)
 }
 
 func oracleScannerClientCommand() *cobra.Command {
@@ -141,17 +143,24 @@ func oracleScannerClientCommand() *cobra.Command {
 
 			svc.Start()
 
+			// metrics server
+			router := controller.NewRouter()
+			server := controller.NewServer(router)
+			server.Start()
+
 			signals := make(chan os.Signal, 1)
 			signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			go func() {
 				s := <-signals
 				logger.Infof(0, "%s signal caught, stopping app", s.String())
 				svc.Stop()
+				server.Stop()
 			}()
 
 			logger.Infof(0, "service started...")
 
 			svc.Wait()
+			server.Wait()
 
 			return nil
 		},
