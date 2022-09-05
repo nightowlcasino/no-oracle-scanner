@@ -271,7 +271,7 @@ loop:
 			//fmt.Printf("total tx bytes - %d\n", totalTxBytesLen)
 			//fmt.Printf("tx value - %d\n", totalTxBytesLen * 360)
 			if time.Now().Local().After(createErgTxInterval) {
-				if numErgBoxes > 0 && !viper.Get("nightowl.test_node").(bool) {
+				if numErgBoxes > 0 && !viper.Get("nightowl.test_mode").(bool) {
 					// use minimum tx value if tx byte size is less than 2778
 					if totalTxBytesLen < 2778 {
 						oracleValue = 1000000
