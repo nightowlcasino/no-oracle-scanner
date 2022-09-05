@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -43,6 +44,8 @@ var (
 
 	oracleValue int
 	numErgBoxes int
+	unconfirmedLimit int
+	unconfirmedOffset int
 
 	baseOracleTxStringBytes = []byte(fmt.Sprintf(`{"requests": [{"address": "%s","value": ,"assets": [],"registers": {"R4": "","R5": ""}}],"fee": %d,"inputsRaw": []}`, oracleAddress, minerFee))
 )
@@ -211,6 +214,9 @@ loop:
 			break loop
 		case result := <-newRand:
 			randomNumber := hex.EncodeToString(result.Randomness())
+			var ergUnconfirmedTxs []erg.ErgTxUnconfirmed = nil
+			unconfirmedLimit = 50
+			unconfirmedOffset = 0
 
 			logger.WithFields(logger.Fields{
 				"round": result.Round(),
@@ -218,19 +224,37 @@ loop:
 				"randomness": randomNumber,
 			}).Infof(0, "new random number")
 
+			// continuously call GetUnconfirmedTxs() until we get all txs
 			start := time.Now()
-			ergUnconfirmedTxs, err := s.ergNode.GetUnconfirmedTxs()
-			if err != nil {
-				logger.WithError(err).WithFields(logger.Fields{
+			for {
+				start1 := time.Now()
+				untxResp, err := s.ergNode.GetUnconfirmedTxs(strconv.Itoa(unconfirmedLimit), strconv.Itoa(unconfirmedOffset))
+				if err != nil {
+					logger.WithError(err).WithFields(logger.Fields{
+						"caller": "GetErgUnconfirmedTxs",
+						"durationMs": time.Since(start1).Milliseconds(),
+					}).Infof(0, "failed to get the latest ERG Unconfirmed Txs")
+					continue
+				}
+				logger.WithFields(logger.Fields{
 					"caller": "GetErgUnconfirmedTxs",
-					"durationMs": time.Since(start).Milliseconds(),
-				}).Infof(0, "failed to get the latest ERG Unconfirmed Txs")
-				continue
+					"durationMs": time.Since(start1).Milliseconds(),
+					"txsCount": len(untxResp),
+				}).Debugf(2, "")
+
+				if len(untxResp) == 0 {
+					break
+				}
+
+				unconfirmedOffset = unconfirmedLimit
+				unconfirmedLimit += unconfirmedLimit
+				ergUnconfirmedTxs = append(ergUnconfirmedTxs, untxResp...)
 			}
 			logger.WithFields(logger.Fields{
 				"caller": "GetErgUnconfirmedTxs",
 				"durationMs": time.Since(start).Milliseconds(),
-			}).Infof(0, "")
+				"totalTxs": len(ergUnconfirmedTxs),
+			}).Infof(0, "finished getting ErgUnconfirmedTxs")
 
 			hash := &CombinedHashes{
 				Hash: randomNumber,
