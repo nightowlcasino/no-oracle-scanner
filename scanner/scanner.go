@@ -31,7 +31,9 @@ const (
 
 var (
 	combinedHashes []CombinedHashes
-	allErgUnconfirmedTxs unconfirmedTxs
+	allErgUnconfirmedTxs = unconfirmedTxs{
+		untx: make(map[string]bool),
+	}
 
 	urls = []string{
 		"https://api.drand.sh",
