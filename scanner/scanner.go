@@ -18,8 +18,8 @@ import (
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/nats-io/nats.go"
 	"github.com/nightowlcasino/nightowl/erg"
-	"github.com/nightowlcasino/nightowl/logger"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 const (
@@ -46,6 +46,7 @@ var (
 	numErgBoxes int
 	unconfirmedLimit int
 	unconfirmedOffset int
+	log *zap.Logger
 
 	baseOracleTxStringBytes = []byte(fmt.Sprintf(`{"requests": [{"address": "%s","value": ,"assets": [],"registers": {"R4": "","R5": ""}}],"fee": %d,"inputsRaw": []}`, oracleAddress, minerFee))
 )
@@ -93,6 +94,7 @@ type Service struct {
 func NewService(nats *nats.Conn) (service *Service, err error) {
 
 	ctx := context.Background()
+	log = zap.L()
 
 	t := &http.Transport{
 		Dial: (&net.Dialer{
@@ -114,10 +116,10 @@ func NewService(nats *nats.Conn) (service *Service, err error) {
 	retryClient.RequestLogHook = func(l retryablehttp.Logger, r *http.Request, i int) {
 		retryCount := i
 		if retryCount > 0 {
-			logger.WithFields(logger.Fields{
-				"caller":      r.URL.Path,
-				"retryCount":  retryCount,
-			}).Infof(0, "func call to %s failed retrying", r.URL.String())
+			log.Info("retryClient request failed, retrying...",
+				zap.String("url", r.URL.String()),
+				zap.Int("retryCount", retryCount),
+			)
 		}
 	}
 
@@ -169,7 +171,7 @@ func (s *Service) cleanErgUnconfirmedTxs(stop chan bool) {
 	for {
 		select {
 		case <-stop:
-			logger.Infof(0, "stopping clean erg unconfirmed txs hash map")
+			log.Info("stopping clean erg unconfirmed txs hash map")
 			stop <- true
 			return
 		case <-cleanErgHashMap:
@@ -178,21 +180,20 @@ func (s *Service) cleanErgUnconfirmedTxs(stop chan bool) {
 				// Call api explorer to see if tx is present and has atleast 3 confirmations
 				ergTx, err := s.ergExplorer.GetErgTx(k)
 				if err != nil {
-					logger.WithError(err).WithFields(logger.Fields{
-						"caller": "GetErgTx",
-						"durationMs": time.Since(start).Milliseconds(),
-						"txId": k,
-					}).Infof(0, "failed call to 'GetErgTx'")
+					log.Error("failed call to 'GetErgTx'",
+						zap.Error(err),
+						zap.Int64("durationMs", time.Since(start).Milliseconds()),
+						zap.String("txId", k),
+					)
 					continue
 				}
 
 				if ergTx.Confirmations >= 3 {
 					allErgUnconfirmedTxs.delete(k)
-					logger.WithFields(logger.Fields{
-						"caller": "GetErgTx",
-						"durationMs": time.Since(start).Milliseconds(),
-						"txId": k,
-					}).Infof(0, "removed tx from allErgUnconfirmedTxs hashmap")
+					log.Info("removed tx from allErgUnconfirmedTxs hashmap",
+						zap.Int64("durationMs", time.Since(start).Milliseconds()),
+						zap.String("txId", k),
+					)
 				}
 			}
 			go wait(cleanErgUnconfirmedTxInterval, cleanErgHashMap)
@@ -209,7 +210,7 @@ loop:
 	for {
 		select {
 		case <-stop:
-			logger.Infof(0, "stopping drand client")
+			log.Info("stopping drand client")
 			stop <- true
 			break loop
 		case result := <-newRand:
@@ -218,11 +219,11 @@ loop:
 			unconfirmedLimit = 50
 			unconfirmedOffset = 0
 
-			logger.WithFields(logger.Fields{
-				"round": result.Round(),
-				"sig": hex.EncodeToString(result.Signature()),
-				"randomness": randomNumber,
-			}).Infof(0, "new random number")
+			log.Info("new random number",
+				zap.Uint64("round", result.Round()),
+				zap.String("sig", hex.EncodeToString(result.Signature())),
+				zap.String("randomness", randomNumber),
+			)
 
 			// continuously call GetUnconfirmedTxs() until we get all txs
 			start := time.Now()
@@ -230,17 +231,16 @@ loop:
 				start1 := time.Now()
 				untxResp, err := s.ergNode.GetUnconfirmedTxs(strconv.Itoa(unconfirmedLimit), strconv.Itoa(unconfirmedOffset))
 				if err != nil {
-					logger.WithError(err).WithFields(logger.Fields{
-						"caller": "GetErgUnconfirmedTxs",
-						"durationMs": time.Since(start1).Milliseconds(),
-					}).Infof(0, "failed to get the latest ERG Unconfirmed Txs")
+					log.Error("failed to get the latest ERG Unconfirmed Txs",
+						zap.Error(err),
+						zap.Int64("durationMs", time.Since(start1).Milliseconds()),
+					)
 					continue
 				}
-				logger.WithFields(logger.Fields{
-					"caller": "GetErgUnconfirmedTxs",
-					"durationMs": time.Since(start1).Milliseconds(),
-					"txsCount": len(untxResp),
-				}).Debugf(2, "")
+				log.Debug("number of unconfirmed erg txs",
+					zap.Int("txsCount", len(untxResp)),
+					zap.Int64("durationMs", time.Since(start1).Milliseconds()),
+				)
 
 				if len(untxResp) == 0 {
 					break
@@ -250,11 +250,10 @@ loop:
 				unconfirmedLimit += unconfirmedLimit
 				ergUnconfirmedTxs = append(ergUnconfirmedTxs, untxResp...)
 			}
-			logger.WithFields(logger.Fields{
-				"caller": "GetErgUnconfirmedTxs",
-				"durationMs": time.Since(start).Milliseconds(),
-				"totalTxs": len(ergUnconfirmedTxs),
-			}).Infof(0, "finished getting ErgUnconfirmedTxs")
+			log.Info("finished getting ErgUnconfirmedTxs",
+				zap.Int("totalTxs", len(ergUnconfirmedTxs)),
+				zap.Int64("durationMs", time.Since(start).Milliseconds()),
+			)
 
 			hash := &CombinedHashes{
 				Hash: randomNumber,
@@ -276,11 +275,11 @@ loop:
 			hashBytes, _ := json.Marshal(hash)
 			s.nats.Publish(viper.Get("nats.random_number_subj").(string), hashBytes)
 
-			logger.WithFields(logger.Fields{
-				"sliceLen": len(combinedHashes) + 1,
-				"numErgBoxes": len(hash.Boxes),
-				"newHash": string(hashBytes)},
-			).Infof(0, "appending to combinedHashes")
+			log.Info("appending to combinedHashes",
+				zap.Int("sliceLen", len(combinedHashes) + 1),
+				zap.Int("numErgBoxes", len(hash.Boxes)),
+				zap.String("newHash", string(hashBytes)),
+			)
 
 			combinedHashes = append(combinedHashes, *hash)
 
@@ -335,17 +334,15 @@ loop:
 					ergTxId, err := s.ergNode.PostErgOracleTx(txToSign)
 					if err != nil {
 						// TODO: better retry and error handling here
-						logger.WithFields(logger.Fields{
-							"caller": "PostErgOracleTx",
-							"error": err.Error(),
-							"durationMs": time.Since(start).Milliseconds(),
-						}).Infof(0, "failed to create ERG Tx")
+						log.Error("failed to create erg tx",
+							zap.Error(err),
+							zap.Int64("durationMs", time.Since(start).Milliseconds()),
+						)
 					} else {
-						logger.WithFields(logger.Fields{
-							"caller": "PostErgOracleTx",
-							"ergTxId": fmt.Sprintf("%s", ergTxId),
-							"durationMs": time.Since(start).Milliseconds()},
-						).Infof(0, "")
+						log.Info("successfully created erg tx",
+							zap.String("ergTxId", string(ergTxId)),
+							zap.Int64("durationMs", time.Since(start).Milliseconds()),
+						)
 					}
 				}
 
