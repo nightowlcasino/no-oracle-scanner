@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +13,7 @@ import (
 	"github.com/nightowlcasino/no-oracle-scanner/scanner"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 )
 
 var (
@@ -20,6 +22,8 @@ var (
 	cfgFile      string
 
 	cmd = oracleScannerClientCommand()
+
+	log *zap.Logger
 
 	MissingNodePasswordErr = errors.New("config ergo_node.password is missing")
 	MissingNodeWalletPassErr = errors.New("config ergo_node.wallet_password is missing")
@@ -41,21 +45,25 @@ func init() {
 
 func initConfig() {
 
+	logger.Initialize("no-oracle-scanner")
+
 	if value := viper.Get("HOSTNAME"); value != nil {
 		hostname = value.(string)
 	} else {
 		var err error
 		hostname, err = os.Hostname()
 		if err != nil {
-			logger.WithError(err).Infof(0, "unable to get hostname")
+			fmt.Printf("unable to get hostname - %s", err.Error())
 			os.Exit(1)
 		}
 	}
 
-	logger.SetDefaults(logger.Fields{
-		"app": "no-oracle-scanner",
-		"host": hostname,
-	})
+	logger.WithOptions(zap.Fields(
+		zap.String("app", "no-oracle-scanner"),
+		zap.String("host", hostname),
+	))
+	log = zap.L()
+	defer log.Sync()
 
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
@@ -63,7 +71,7 @@ func initConfig() {
 		// use current directory
 		dir, err := os.Getwd()
 		if err != nil {
-			logger.WithError(err).Infof(0, "failed to get working directory")
+			log.Error("failed to get working directory", zap.Error(err))
 			os.Exit(1)
 		}
 		viper.AddConfigPath(dir)
@@ -73,10 +81,10 @@ func initConfig() {
 
 	err := viper.ReadInConfig()
 	if err != nil {
-		logger.WithError(err).Infof(0, "failed to read config file")
+		log.Error("failed to read config file", zap.Error(err))
 		os.Exit(1)
 	}
-	logger.Infof(0, "using config file: %s", viper.ConfigFileUsed())
+	log.Info("successfully parsed config file", zap.String("file", viper.ConfigFileUsed()))
 
 	// set defaults
 	viper.SetDefault("ergo_node.fqdn", "213.239.193.208")
@@ -94,17 +102,17 @@ func oracleScannerClientCommand() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 
-			if value := viper.Get("logging.level"); value != nil {
-				lvl, err := logger.ParseLevel(value.(string))
-				if err != nil {
-					logger.Warnf(1, "config logging.level is not valid, defaulting to info log level")
-					logger.SetVerbosity(1)
-				}
-				logger.SetVerbosity(lvl)
-			} else {
-				logger.Warnf(1, "config logging.level is not found, defaulting to info log level")
-				logger.SetVerbosity(1)
-			}
+			//if value := viper.Get("logging.level"); value != nil {
+			//	lvl, err := logger.ParseLevel(value.(string))
+			//	if err != nil {
+			//		logger.Warnf(1, "config logging.level is not valid, defaulting to info log level")
+			//		logger.SetVerbosity(1)
+			//	}
+			//	logger.SetVerbosity(lvl)
+			//} else {
+			//	logger.Warnf(1, "config logging.level is not found, defaulting to info log level")
+			//	logger.SetVerbosity(1)
+			//}
 
 			// validate configs and set defaults if necessary
 			if value := viper.Get("nats.endpoint"); value != nil {
@@ -114,30 +122,30 @@ func oracleScannerClientCommand() *cobra.Command {
 			}
 
 			if value := viper.Get("ergo_node.api_key"); value == nil {
-				logger.WithError(MissingNodeApiKeyErr).Infof(0, "required config is absent")
+				log.Error("required config is absent", zap.Error(MissingNodeApiKeyErr))
 				return MissingNodeApiKeyErr
 			}
 
 			if value := viper.Get("ergo_node.password"); value == nil {
-				logger.WithError(MissingNodePasswordErr).Infof(0, "required config is absent")
+				log.Error("required config is absent", zap.Error(MissingNodePasswordErr))
 				return MissingNodePasswordErr
 			}
 
 			if value := viper.Get("ergo_node.wallet_password"); value == nil {
-				logger.WithError(MissingNodeWalletPassErr).Infof(0, "required config is absent")
+				log.Error("required config is absent", zap.Error(MissingNodeWalletPassErr))
 				return MissingNodeWalletPassErr
 			}
 
 			// Connect to the nats server
 			nats, err := nats.Connect(natsEndpoint)
 			if err != nil {
-				logger.WithError(err).Infof(0, "failed to connect to %s nats server", natsEndpoint)
+				log.Error("failed to connect to nats server", zap.Error(err), zap.String("endpoint", natsEndpoint))
 				return err
 			}
 
 			svc, err := scanner.NewService(nats)
 			if err != nil {
-				logger.WithError(err).Infof(0, "failed to create no-oracle-scanner service")
+				log.Error("failed to create no-oracle-scanner service", zap.Error(err), zap.String("endpoint", natsEndpoint))
 				return err
 			}
 
@@ -152,12 +160,12 @@ func oracleScannerClientCommand() *cobra.Command {
 			signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 			go func() {
 				s := <-signals
-				logger.Infof(0, "%s signal caught, stopping app", s.String())
+				log.Info(s.String() + " signal caught, stopping app")
 				svc.Stop()
 				server.Stop()
 			}()
 
-			logger.Infof(0, "service started...")
+			log.Info("service started...")
 
 			svc.Wait()
 			server.Wait()
