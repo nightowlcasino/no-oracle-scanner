@@ -246,8 +246,7 @@ loop:
 					break
 				}
 
-				unconfirmedOffset = unconfirmedLimit
-				unconfirmedLimit += unconfirmedLimit
+				unconfirmedOffset += unconfirmedLimit
 				ergUnconfirmedTxs = append(ergUnconfirmedTxs, untxResp...)
 			}
 			log.Info("finished getting ErgUnconfirmedTxs",

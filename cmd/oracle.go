@@ -58,10 +58,6 @@ func initConfig() {
 		}
 	}
 
-	logger.WithOptions(zap.Fields(
-		zap.String("app", "no-oracle-scanner"),
-		zap.String("host", hostname),
-	))
 	log = zap.L()
 	defer log.Sync()
 
