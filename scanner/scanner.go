@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -229,7 +228,7 @@ loop:
 			start := time.Now()
 			for {
 				start1 := time.Now()
-				untxResp, err := s.ergNode.GetUnconfirmedTxs(strconv.Itoa(unconfirmedLimit), strconv.Itoa(unconfirmedOffset))
+				untxResp, err := s.ergNode.GetUnconfirmedTxs(unconfirmedLimit, unconfirmedOffset)
 				if err != nil {
 					log.Error("failed to get the latest ERG Unconfirmed Txs",
 						zap.Error(err),
@@ -293,7 +292,7 @@ loop:
 			//fmt.Printf("total tx bytes - %d\n", totalTxBytesLen)
 			//fmt.Printf("tx value - %d\n", totalTxBytesLen * 360)
 			if time.Now().Local().After(createErgTxInterval) {
-				if numErgBoxes > 0 && !viper.Get("nightowl.test_mode").(bool) {
+				if numErgBoxes > 0 {
 					// use minimum tx value if tx byte size is less than 2778
 					if totalTxBytesLen < 2778 {
 						oracleValue = 1000000
