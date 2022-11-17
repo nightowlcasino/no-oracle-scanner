@@ -88,6 +88,7 @@ func initConfig() {
 	viper.SetDefault("ergo_node.port", 9053)
 	viper.SetDefault("nats.random_number_subj", "drand.hash")
 	viper.SetDefault("nightowl.test_mode", false)
+	viper.SetDefault("nightowl.tx_send_retry_interval", "30s")
 	viper.SetDefault("metrics.port", 8090)
 }
 
@@ -98,17 +99,10 @@ func oracleScannerClientCommand() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 
-			//if value := viper.Get("logging.level"); value != nil {
-			//	lvl, err := logger.ParseLevel(value.(string))
-			//	if err != nil {
-			//		logger.Warnf(1, "config logging.level is not valid, defaulting to info log level")
-			//		logger.SetVerbosity(1)
-			//	}
-			//	logger.SetVerbosity(lvl)
-			//} else {
-			//	logger.Warnf(1, "config logging.level is not found, defaulting to info log level")
-			//	logger.SetVerbosity(1)
-			//}
+			if value := viper.Get("logging.level"); value != nil {
+				// logger will default to info level if user provided level is incorrect
+				logger.SetLevel(value.(string))
+			}
 
 			// validate configs and set defaults if necessary
 			if value := viper.Get("nats.endpoint"); value != nil {
@@ -147,7 +141,7 @@ func oracleScannerClientCommand() *cobra.Command {
 
 			svc.Start()
 
-			// metrics server
+			// server for metrics and manage failed unsigned transactions that are retrying
 			router := controller.NewRouter()
 			server := controller.NewServer(router)
 			server.Start()
