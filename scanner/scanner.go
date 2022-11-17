@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/drand/drand/client"
 	drand_http "github.com/drand/drand/client/http"
 	drand_logger "github.com/drand/drand/log"
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/nats-io/nats.go"
 	"github.com/nightowlcasino/nightowl/erg"
@@ -23,7 +25,7 @@ import (
 
 const (
 	cleanErgUnconfirmedTxInterval = 30 * time.Second
-	ergTxInterval                 = 200 * time.Second //400
+	ergTxInterval                 = 200 * time.Second
 	oracleAddress                 = "4FC5xSYb7zfRdUhm6oRmE11P2GJqSMY8UARPbHkmXEq6hTinXq4XNWdJs73BEV44MdmJ49Qo"
 	rouletteErgoTree              = "101b0400040004000402054a0e20473041c7e13b5f5947640f79f00d3c5df22fad4841191260350bb8c526f9851f040004000514052605380504050404020400040205040404050f05120406050604080509050c040a0e200ef2e4e25f93775412ac620a1da495943c55ea98e72f3e95d1a18d7ace2f676cd809d601b2a5730000d602b2db63087201730100d603b2db6501fe730200d604e4c672010404d605e4c6a70404d6069e7cb2e4c67203041a9a72047303007304d607e4c6a70504d6087e720705d6099972087206d1ed96830301938c7202017305938c7202028cb2db6308a77306000293b2b2e4c67203050c1a720400e4c67201050400c5a79597830601ed937205730795ec9072067308ed9272067309907206730a939e7206730b7208ed949e7206730c7208ec937207730d937207730eed937205730f939e720673107208eded937205731192720973129072097313ed9372057314939e720673157208eded937205731692720973179072097318ed9372057319937208720693c27201e4c6a7060e93cbc27201731a"
 	minerFee                      = 1500000 // 0.0015 ERG
@@ -34,6 +36,9 @@ var (
 	allErgUnconfirmedTxs = unconfirmedTxs{
 		untx: make(map[string]bool),
 	}
+	TxRetryer = Retryer{
+		UnsignedTxs: make(map[string]UnsignedTx),
+	}
 
 	urls = []string{
 		"https://api.drand.sh",
@@ -41,13 +46,12 @@ var (
 	}
 	chainHash, _ = hex.DecodeString("8990e7a9aaed2ffed73dbd7092123d6f289930540d7651336225dc172e51b2ce")
 
-	oracleValue int
 	numErgBoxes int
 	unconfirmedLimit int
 	unconfirmedOffset int
 	log *zap.Logger
 
-	baseOracleTxStringBytes = []byte(fmt.Sprintf(`{"requests": [{"address": "%s","value": ,"assets": [],"registers": {"R4": "","R5": ""}}],"fee": %d,"inputsRaw": []}`, oracleAddress, minerFee))
+	baseOracleTxStringBytes = []byte(fmt.Sprintf(`{"requests":[{"address":"%s","value":,"assets":[],"registers":{"R4":"","R5":""}}],"fee":%d,"inputsRaw":[]}`, oracleAddress, minerFee))
 )
 
 type CombinedHashes struct {
@@ -152,6 +156,9 @@ func NewService(nats *nats.Conn) (service *Service, err error) {
 		done:        make(chan bool),
 	}
 
+	TxRetryer.ergNode = ergNodeClient
+	TxRetryer.retryInterval = viper.GetDuration("nightowl.tx_send_retry_interval")
+
 	return service, err
 }
 
@@ -159,10 +166,6 @@ func wait(sleepTime time.Duration, c chan bool) {
 	time.Sleep(sleepTime)
 	c <- true
 }
-
-//func calcTxValue() {
-//
-//}
 
 func (s *Service) cleanErgUnconfirmedTxs(stop chan bool) {
 	cleanErgHashMap := make(chan bool, 1)
@@ -182,7 +185,7 @@ func (s *Service) cleanErgUnconfirmedTxs(stop chan bool) {
 					log.Error("failed call to 'GetErgTx'",
 						zap.Error(err),
 						zap.Int64("durationMs", time.Since(start).Milliseconds()),
-						zap.String("txId", k),
+						zap.String("tx_id", k),
 					)
 					continue
 				}
@@ -191,12 +194,11 @@ func (s *Service) cleanErgUnconfirmedTxs(stop chan bool) {
 					allErgUnconfirmedTxs.delete(k)
 					log.Info("removed tx from allErgUnconfirmedTxs hashmap",
 						zap.Int64("durationMs", time.Since(start).Milliseconds()),
-						zap.String("txId", k),
+						zap.String("tx_id", k),
 					)
 				}
 			}
 			go wait(cleanErgUnconfirmedTxInterval, cleanErgHashMap)
-		default:
 		}
 	}
 }
@@ -214,7 +216,7 @@ loop:
 			break loop
 		case result := <-newRand:
 			randomNumber := hex.EncodeToString(result.Randomness())
-			var ergUnconfirmedTxs []erg.ErgTxUnconfirmed = nil
+			var ergUnconfirmedTxOutputs []erg.ErgTxOutputNode = nil
 			unconfirmedLimit = 50
 			unconfirmedOffset = 0
 
@@ -224,20 +226,20 @@ loop:
 				zap.String("randomness", randomNumber),
 			)
 
-			// continuously call GetUnconfirmedTxs() until we get all txs
+			// continuously call GetUnconfirmedOutputsByErgoTree() until we get all tx outputs with the roulette ergo tree
 			start := time.Now()
 			for {
 				start1 := time.Now()
-				untxResp, err := s.ergNode.GetUnconfirmedTxs(unconfirmedLimit, unconfirmedOffset)
+				untxResp, err := s.ergNode.GetUnconfirmedOutputsByErgoTree(rouletteErgoTree, unconfirmedLimit, unconfirmedOffset)
 				if err != nil {
-					log.Error("failed to get the latest ERG Unconfirmed Txs",
+					log.Error("failed to get the latest ERG Unconfirmed tx outputs",
 						zap.Error(err),
 						zap.Int64("durationMs", time.Since(start1).Milliseconds()),
 					)
 					continue
 				}
-				log.Debug("number of unconfirmed erg txs",
-					zap.Int("txsCount", len(untxResp)),
+				log.Debug("number of unconfirmed erg tx outputs",
+					zap.Int("outputs_count", len(untxResp)),
 					zap.Int64("durationMs", time.Since(start1).Milliseconds()),
 				)
 
@@ -246,10 +248,10 @@ loop:
 				}
 
 				unconfirmedOffset += unconfirmedLimit
-				ergUnconfirmedTxs = append(ergUnconfirmedTxs, untxResp...)
+				ergUnconfirmedTxOutputs = append(ergUnconfirmedTxOutputs, untxResp...)
 			}
-			log.Info("finished getting ErgUnconfirmedTxs",
-				zap.Int("totalTxs", len(ergUnconfirmedTxs)),
+			log.Info("finished getting ErgUnconfirmedTxOutputs",
+				zap.Int("total_outputs", len(ergUnconfirmedTxOutputs)),
 				zap.Int64("durationMs", time.Since(start).Milliseconds()),
 			)
 
@@ -257,16 +259,11 @@ loop:
 				Hash: randomNumber,
 			}
 
-			for _, tx := range ergUnconfirmedTxs {
-				// TODO: find a better algorithm to check for existing erg txs
-				if _, ok := allErgUnconfirmedTxs.get(tx.Id); !ok {
-					for _, box := range tx.Outputs {
-						if box.ErgoTree == rouletteErgoTree {
-							hash.Boxes = append(hash.Boxes, box.BoxId)
-							allErgUnconfirmedTxs.set(tx.Id, true)
-							numErgBoxes += 1
-						}
-					}
+			for _, output := range ergUnconfirmedTxOutputs {
+				if _, ok := allErgUnconfirmedTxs.get(output.TxId); !ok {
+					hash.Boxes = append(hash.Boxes, output.BoxId)
+					allErgUnconfirmedTxs.set(output.TxId, true)
+					numErgBoxes += 1
 				}
 			}
 
@@ -274,28 +271,32 @@ loop:
 			s.nats.Publish(viper.Get("nats.random_number_subj").(string), hashBytes)
 
 			log.Info("appending to combinedHashes",
-				zap.Int("sliceLen", len(combinedHashes) + 1),
-				zap.Int("numErgBoxes", len(hash.Boxes)),
-				zap.String("newHash", string(hashBytes)),
+				zap.Int("combined_hashes_len", len(combinedHashes) + 1),
+				zap.Int("erg_boxes_len", len(hash.Boxes)),
+				zap.String("new_hash", string(hashBytes)),
 			)
 
 			combinedHashes = append(combinedHashes, *hash)
 
-			// Need to send ERG oracle tx after configured time or when tx byte size is greater than 2777
+			// Need to send all ERG nightowl bets when a configured time is triggered and we found
+			// unconfirmed nightowl bets and have collected atleast 2 random numbers
 			combinedHashesLen := len(combinedHashes)
 			r4BytesLen := combinedHashesLen + 1 + (33 * combinedHashesLen)
 			r5BytesLen := combinedHashesLen + 2 + (33 * combinedHashesLen)
 			totalTxBytesLen := len(baseOracleTxStringBytes) + r4BytesLen + r5BytesLen
-			//fmt.Printf("number of bytes baseOracleTxStringBytes - %d\n", len(baseOracleTxStringBytes))
-			//fmt.Printf("number of bytes r4 - %d\n", combinedHashesLen + 1 + (33 * combinedHashesLen))
-			//fmt.Printf("number of bytes r5 - %d\n", combinedHashesLen + 2 + (33 * combinedHashesLen))
-			//fmt.Printf("total tx bytes - %d\n", totalTxBytesLen)
-			//fmt.Printf("tx value - %d\n", totalTxBytesLen * 360)
 			if time.Now().Local().After(createErgTxInterval) {
-				if numErgBoxes > 0 {
-					// use minimum tx value if tx byte size is less than 2778
-					if totalTxBytesLen < 2778 {
-						oracleValue = 1000000
+				if numErgBoxes > 0 && len(combinedHashes) >= 2 {
+					txValue, err := s.ergNode.GetTxFee(totalTxBytesLen)
+					if err != nil {
+						log.Error("Error getting tx fee from ergo node, defaulting to 2000000",
+							zap.Error(err),
+						)
+						txValue = 2000000
+					} else {
+						log.Debug("GetTxFee successful",
+							zap.Int("tx_bytes_len", totalTxBytesLen),
+							zap.Int("oracle_tx_fee", txValue),
+						)
 					}
 
 					r4 := "1a" + fmt.Sprintf("%02x", len(combinedHashes))
@@ -326,34 +327,39 @@ loop:
             			],
             			"fee": %d,
             			"inputsRaw": []
-          			}`, oracleAddress, oracleValue, r4, r5, minerFee))
+          			}`, oracleAddress, txValue, r4, r5, minerFee))
+					log.Debug("tx for ergo node to sign",
+						zap.String("unsigned_tx", string(txToSign)),
+					)
 
 					start = time.Now()
 					ergTxId, err := s.ergNode.PostErgOracleTx(txToSign)
 					if err != nil {
-						// TODO: better retry and error handling here
+						// add tx to the Retryer which will retry to send this Tx forever or until it is successful
+						TxRetryer.Add(uuid.NewString(), txToSign)
 						log.Error("failed to create erg tx",
 							zap.Error(err),
 							zap.Int64("durationMs", time.Since(start).Milliseconds()),
 						)
 					} else {
 						log.Info("successfully created erg tx",
-							zap.String("ergTxId", string(ergTxId)),
+							zap.String("erg_tx_id", strings.Trim(string(ergTxId),"\"")),
 							zap.Int64("durationMs", time.Since(start).Milliseconds()),
 						)
 					}
 				}
 
-				// keep the last 2 indicies
-				combinedHashes = combinedHashes[len(combinedHashes)-2:]
-				numErgBoxes = 0
-				for _, h := range combinedHashes {
-					numErgBoxes += len(h.Boxes)
+				// keep the last index for the next batch of random numbers and bets
+				if len(combinedHashes) > 1 {
+					combinedHashes = combinedHashes[len(combinedHashes)-1:]
+					numErgBoxes = 0
+					for _, h := range combinedHashes {
+						numErgBoxes += len(h.Boxes)
+					}
 				}
 
 				createErgTxInterval = time.Now().Local().Add(time.Duration(ergTxInterval))
 			}
-		default:
 		}
 	}
 }
@@ -363,6 +369,7 @@ func (s *Service) Start() {
 	stopScanner := make(chan bool)
 	go s.cleanErgUnconfirmedTxs(stopScanner)
 	go s.getDrandNumber(stopScanner)
+	go TxRetryer.RetryLoop()
 
 	// Wait for a "stop" message in the background to stop the service.
 	go func(stopScanner chan bool) {
