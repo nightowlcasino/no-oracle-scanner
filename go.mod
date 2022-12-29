@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.1
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/nats-io/nats.go v1.16.0
-	github.com/nightowlcasino/nightowl v0.0.5
+	github.com/nightowlcasino/nightowl v0.0.7
 	github.com/spf13/cobra v1.5.0
 	github.com/spf13/viper v1.12.0
 	go.uber.org/zap v1.23.0

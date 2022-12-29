@@ -45,8 +45,6 @@ func init() {
 
 func initConfig() {
 
-	logger.Initialize("no-oracle-scanner")
-
 	if value := viper.Get("HOSTNAME"); value != nil {
 		hostname = value.(string)
 	} else {
@@ -57,6 +55,8 @@ func initConfig() {
 			os.Exit(1)
 		}
 	}
+
+	logger.Initialize("no-oracle-scanner", hostname)
 
 	log = zap.L()
 	defer log.Sync()
